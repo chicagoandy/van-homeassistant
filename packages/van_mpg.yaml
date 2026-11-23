@@ -200,3 +200,15 @@ sensor:
     round: 3
     max_sub_interval:
       seconds: 30
+
+  # Highest GPS speed in the last 10 minutes (clock time)
+  - platform: statistics
+    name: Victron NMEA-0183 GPS (ACM0) GPS Max Speed 10 min
+    # → sensor.victron_nmea_0183_gps_acm0_gps_max_speed_10_min
+    unique_id: van_mpg_gps_max_speed_10_min
+    entity_id: sensor.nmea_0183_gps_acm0_victron_vehicle_speed
+    state_characteristic: value_max
+    max_age:
+      minutes: 10
+    keep_last_sample: true
+    precision: 1

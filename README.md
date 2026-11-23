@@ -55,6 +55,7 @@ the 2-hour figure is always your last ~2 hours of running.
 | `sensor.fuel_use_total_grams` | g |
 | `sensor.victron_nmea_0183_gps_acm0_gps_distance_driven` | mi |
 | `sensor.gps_tracked_odometer` | mi |
+| `sensor.victron_nmea_0183_gps_acm0_gps_max_speed_10_min` | highest speed in the last 10 min (clock time) |
 | `sensor.mpg_accumulator` | engine minutes logged; weighted sums in attributes |
 | `sensor.average_mpg_10_min` / `_2_hour` / `_12_hour` | MPG |
 
