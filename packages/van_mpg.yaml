@@ -147,6 +147,14 @@ template:
       - condition: state
         entity_id: binary_sensor.wican_engine_live
         state: "on"
+      # Shutdown bleed guard: after the WiCAN goes quiet, the gated fuel rate
+      # only drops to 0 at the next minute tick, and the fuel total then jumps
+      # by (last rate × gap). By then the raw reading is stale, so this
+      # condition drops that jump. Fresh data → real fuel → counted.
+      - condition: template
+        value_template: >
+          {% set f = states.sensor.wican_fuel_rate %}
+          {{ f is not none and (now() - f.last_reported).total_seconds() < 30 }}
       - condition: template
         value_template: >
           {{ trigger.from_state is not none and trigger.to_state is not none
