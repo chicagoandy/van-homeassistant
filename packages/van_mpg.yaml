@@ -1,0 +1,202 @@
+# =============================================================================
+#  van_mpg — fuel economy, distance and odometer for the van
+# =============================================================================
+#  Inputs (created elsewhere, not by this package):
+#    sensor.wican_engine_speed            WiCAN RPM
+#    sensor.wican_fuel_rate               WiCAN fuel mass flow, g/s
+#    device_tracker.nmea_0183_gps_acm0_location
+#                                         Victron GX GPS (speed attribute, m/s)
+#    input_number.startingodometerreading Odometer at the moment the GPS
+#                                         distance total was last zeroed
+#
+#  How the MPG averages work
+#  * Fuel (g) and GPS miles are both turned into running totals.
+#  * The "MPG accumulator" sees every change of those totals WHILE THE ENGINE
+#    IS RUNNING and keeps exponentially weighted sums of fuel and miles for
+#    three windows: 10 minutes, 2 hours and 12 hours of ENGINE time.
+#    Parked time doesn't exist for it, so after a stop the averages pick up
+#    exactly where they left off.
+#  * Average MPG = weighted miles ÷ weighted gallons. Fuel is weighted by
+#    fuel burned, not by time, so coasting at 99 "instant MPG" can't
+#    inflate it.
+#  * 2819 g = one US gallon of gasoline (0.745 kg/L × 3.785 L).
+# =============================================================================
+
+template:
+  # ---------------------------------------------------------------------------
+  # Engine state, straight from the WiCAN data stream.
+  # On while RPM > 300 and a reading arrived in the last 30 s. The WiCAN goes
+  # silent at shutdown and the last values get stuck, so freshness matters.
+  # Switches off 30–90 s after shutdown (now() re-renders once a minute).
+  # ---------------------------------------------------------------------------
+  - binary_sensor:
+      - name: WiCAN Engine Live
+        unique_id: van_mpg_wican_engine_live
+        default_entity_id: binary_sensor.wican_engine_live
+        device_class: running
+        state: >
+          {% set r = states.sensor.wican_engine_speed %}
+          {{ r is not none
+             and r.state | float(0) > 300
+             and (now() - r.last_reported).total_seconds() < 30 }}
+
+  - sensor:
+      # ---- Speed / distance inputs -----------------------------------------
+      - name: Victron Vehicle Speed
+        unique_id: van_mpg_victron_vehicle_speed
+        default_entity_id: sensor.nmea_0183_gps_acm0_victron_vehicle_speed
+        unit_of_measurement: mph
+        device_class: speed
+        state_class: measurement
+        # m/s → mph; below 1 mph counts as 0 (GPS jitter when parked)
+        state: >
+          {% set mph = state_attr('device_tracker.nmea_0183_gps_acm0_location', 'speed') | float(0) * 2.23694 %}
+          {{ (mph if mph >= 1 else 0) | round(1) }}
+
+      # The integration sensor names its unit "<source unit>·h", so feeding it
+      # "mph" gives "mphh". This copy is labelled mi/h so the total comes out
+      # as plain "mi".
+      - name: GPS Speed for Distance
+        unique_id: van_mpg_gps_speed_for_distance
+        default_entity_id: sensor.gps_speed_for_distance
+        unit_of_measurement: mi/h
+        state_class: measurement
+        state: "{{ states('sensor.nmea_0183_gps_acm0_victron_vehicle_speed') | float(0) }}"
+
+      # ---- Fuel input --------------------------------------------------------
+      # 0 unless the engine is live AND the fuel reading itself is fresh.
+      # Without the freshness check, the last WiCAN value (e.g. 0.4 g/s) kept
+      # being integrated for ~20 min after shutdown and invented ~0.2 gal.
+      - name: WiCAN Fuel Rate Engine Running
+        unique_id: van_mpg_fuel_rate_engine_running
+        default_entity_id: sensor.wican_fuel_rate_engine_running
+        unit_of_measurement: g/s
+        state_class: measurement
+        state: >
+          {% set f = states.sensor.wican_fuel_rate %}
+          {% set fresh = f is not none and (now() - f.last_reported).total_seconds() < 30 %}
+          {{ f.state | float(0) if fresh and is_state('binary_sensor.wican_engine_live', 'on') else 0 }}
+
+      # ---- Odometer ----------------------------------------------------------
+      - name: Odometer
+        unique_id: van_mpg_odometer
+        default_entity_id: sensor.gps_tracked_odometer
+        unit_of_measurement: mi
+        device_class: distance
+        state_class: total_increasing
+        state: >
+          {{ (states('input_number.startingodometerreading') | float(0)
+              + states('sensor.victron_nmea_0183_gps_acm0_gps_distance_driven') | float(0)) | round(1) }}
+        availability: >
+          {{ states('input_number.startingodometerreading') | is_number
+             and states('sensor.victron_nmea_0183_gps_acm0_gps_distance_driven') | is_number }}
+
+      # ---- Average MPG over engine-time windows -------------------------------
+      # Under 20 g of weighted fuel there's too little data → unknown.
+      - name: Average MPG 10 min
+        unique_id: van_mpg_average_10_min
+        default_entity_id: sensor.average_mpg_10_min
+        unit_of_measurement: MPG
+        state_class: measurement
+        icon: mdi:gas-station
+        state: >
+          {% set f = state_attr('sensor.mpg_accumulator', 'fuel_10m') | float(0) %}
+          {% set m = state_attr('sensor.mpg_accumulator', 'miles_10m') | float(0) %}
+          {{ (m / (f / 2819)) | round(1) if f > 20 else none }}
+
+      - name: Average MPG 2 hour
+        unique_id: van_mpg_average_2_hour
+        default_entity_id: sensor.average_mpg_2_hour
+        unit_of_measurement: MPG
+        state_class: measurement
+        icon: mdi:gas-station
+        state: >
+          {% set f = state_attr('sensor.mpg_accumulator', 'fuel_2h') | float(0) %}
+          {% set m = state_attr('sensor.mpg_accumulator', 'miles_2h') | float(0) %}
+          {{ (m / (f / 2819)) | round(1) if f > 20 else none }}
+
+      - name: Average MPG 12 hour
+        unique_id: van_mpg_average_12_hour
+        default_entity_id: sensor.average_mpg_12_hour
+        unit_of_measurement: MPG
+        state_class: measurement
+        icon: mdi:gas-station
+        state: >
+          {% set f = state_attr('sensor.mpg_accumulator', 'fuel_12h') | float(0) %}
+          {% set m = state_attr('sensor.mpg_accumulator', 'miles_12h') | float(0) %}
+          {{ (m / (f / 2819)) | round(1) if f > 20 else none }}
+
+  # ---------------------------------------------------------------------------
+  # MPG accumulator (trigger-based, so state and attributes survive restarts)
+  #
+  # Fires on every change of the fuel or distance total while the engine is
+  # live. Each update:
+  #   1. decays the previous weighted sums by e^(-dt/τ), where dt is the
+  #      engine time since the last update (capped at 15 s, so a gap after a
+  #      stop or restart is never counted as driving), then
+  #   2. adds the new fuel (g) or miles.
+  # τ = 600 s, 7200 s and 43200 s for the 10 min, 2 h and 12 h windows.
+  # State = engine minutes logged (handy for checking it's alive).
+  # ---------------------------------------------------------------------------
+  - triggers:
+      - trigger: state
+        entity_id:
+          - sensor.fuel_use_total_grams
+          - sensor.victron_nmea_0183_gps_acm0_gps_distance_driven
+    conditions:
+      - condition: state
+        entity_id: binary_sensor.wican_engine_live
+        state: "on"
+      - condition: template
+        value_template: >
+          {{ trigger.from_state is not none and trigger.to_state is not none
+             and trigger.from_state.state | is_number
+             and trigger.to_state.state | is_number }}
+    variables:
+      delta: "{{ trigger.to_state.state | float - trigger.from_state.state | float }}"
+      d_fuel: >
+        {{ delta if trigger.entity_id == 'sensor.fuel_use_total_grams'
+           and 0 <= delta < 200 else 0 }}
+      d_miles: >
+        {{ delta if trigger.entity_id != 'sensor.fuel_use_total_grams'
+           and 0 <= delta < 1 else 0 }}
+      dt: >
+        {% set a = states.sensor.mpg_accumulator %}
+        {{ ([(now() - a.last_updated).total_seconds(), 15] | min) if a is not none else 7 }}
+    sensor:
+      - name: MPG Accumulator
+        unique_id: van_mpg_accumulator
+        default_entity_id: sensor.mpg_accumulator
+        unit_of_measurement: min
+        icon: mdi:sigma
+        state: "{{ (this.state | float(0) + dt / 60) | round(2) }}"
+        attributes:
+          fuel_10m: "{{ (this.attributes.get('fuel_10m', 0) | float(0) * e ** (-dt / 600) + d_fuel) | round(3) }}"
+          miles_10m: "{{ (this.attributes.get('miles_10m', 0) | float(0) * e ** (-dt / 600) + d_miles) | round(5) }}"
+          fuel_2h: "{{ (this.attributes.get('fuel_2h', 0) | float(0) * e ** (-dt / 7200) + d_fuel) | round(3) }}"
+          miles_2h: "{{ (this.attributes.get('miles_2h', 0) | float(0) * e ** (-dt / 7200) + d_miles) | round(5) }}"
+          fuel_12h: "{{ (this.attributes.get('fuel_12h', 0) | float(0) * e ** (-dt / 43200) + d_fuel) | round(3) }}"
+          miles_12h: "{{ (this.attributes.get('miles_12h', 0) | float(0) * e ** (-dt / 43200) + d_miles) | round(5) }}"
+
+# =============================================================================
+#  Running totals (Riemann sum). Entity IDs come from the names.
+# =============================================================================
+sensor:
+  - platform: integration
+    name: Fuel Use Total (Grams)          # → sensor.fuel_use_total_grams
+    unique_id: van_mpg_fuel_use_total_grams
+    source: sensor.wican_fuel_rate_engine_running
+    unit_time: s                          # g/s × s = g
+    method: left
+    round: 2
+
+  - platform: integration
+    name: Victron NMEA-0183 GPS (ACM0) GPS Distance Driven
+    # → sensor.victron_nmea_0183_gps_acm0_gps_distance_driven
+    unique_id: van_mpg_gps_distance_driven
+    source: sensor.gps_speed_for_distance
+    unit_time: h                          # mi/h × h = mi
+    method: left
+    round: 3
+    max_sub_interval:
+      seconds: 30
