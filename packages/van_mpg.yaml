@@ -140,37 +140,59 @@ template:
   # ---------------------------------------------------------------------------
   - triggers:
       - trigger: state
+        id: data
         entity_id:
           - sensor.fuel_use_total_grams
           - sensor.victron_nmea_0183_gps_acm0_gps_distance_driven
+      # Start-up / template reload: rewrites the attributes unchanged (or as 0
+      # the very first time) so they always exist, even before the first drive.
+      # Template sensors reading them, and Spook, then never see them missing.
+      - trigger: homeassistant
+        id: init
+        event: start
+      - trigger: event
+        id: init
+        event_type: event_template_reloaded
     conditions:
-      - condition: state
-        entity_id: binary_sensor.wican_engine_live
-        state: "on"
-      # Shutdown bleed guard: after the WiCAN goes quiet, the gated fuel rate
-      # only drops to 0 at the next minute tick, and the fuel total then jumps
-      # by (last rate × gap). By then the raw reading is stale, so this
-      # condition drops that jump. Fresh data → real fuel → counted.
-      - condition: template
-        value_template: >
-          {% set f = states.sensor.wican_fuel_rate %}
-          {{ f is not none and (now() - f.last_reported).total_seconds() < 30 }}
-      - condition: template
-        value_template: >
-          {{ trigger.from_state is not none and trigger.to_state is not none
-             and trigger.from_state.state | is_number
-             and trigger.to_state.state | is_number }}
+      - condition: or
+        conditions:
+          - condition: trigger
+            id: init
+          - condition: and
+            conditions:
+              - condition: state
+                entity_id: binary_sensor.wican_engine_live
+                state: "on"
+              # Shutdown bleed guard: after the WiCAN goes quiet, the gated fuel
+              # rate only drops to 0 at the next minute tick, and the fuel total
+              # then jumps by (last rate × gap). By then the raw reading is
+              # stale, so this drops that jump. Fresh data → real fuel → counted.
+              - condition: template
+                value_template: >
+                  {% set f = states.sensor.wican_fuel_rate %}
+                  {{ f is not none and (now() - f.last_reported).total_seconds() < 30 }}
+              - condition: template
+                value_template: >
+                  {{ trigger.from_state is not none and trigger.to_state is not none
+                     and trigger.from_state.state | is_number
+                     and trigger.to_state.state | is_number }}
     variables:
-      delta: "{{ trigger.to_state.state | float - trigger.from_state.state | float }}"
+      is_data: "{{ trigger.id == 'data' }}"
+      delta: >
+        {{ (trigger.to_state.state | float - trigger.from_state.state | float)
+           if is_data else 0 }}
       d_fuel: >
-        {{ delta if trigger.entity_id == 'sensor.fuel_use_total_grams'
+        {{ delta if is_data and trigger.entity_id == 'sensor.fuel_use_total_grams'
            and 0 <= delta < 200 else 0 }}
       d_miles: >
-        {{ delta if trigger.entity_id != 'sensor.fuel_use_total_grams'
+        {{ delta if is_data and trigger.entity_id != 'sensor.fuel_use_total_grams'
            and 0 <= delta < 1 else 0 }}
+      # Engine time since the last update, capped at 15 s; 0 on init (no decay).
       dt: >
         {% set a = states.sensor.mpg_accumulator %}
-        {{ ([(now() - a.last_updated).total_seconds(), 15] | min) if a is not none else 7 }}
+        {% if not is_data %}0
+        {% elif a is none %}7
+        {% else %}{{ [(now() - a.last_updated).total_seconds(), 15] | min }}{% endif %}
     sensor:
       - name: MPG Accumulator
         unique_id: van_mpg_accumulator
