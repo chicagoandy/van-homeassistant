@@ -60,3 +60,81 @@ the 2-hour figure is always your last ~2 hours of running.
 | `sensor.average_mpg_10_min` / `_2_hour` / `_12_hour` | MPG |
 
 Real-time (instant) MPG lives in `packages/wican/wican.yaml` (`sensor.real_time_fuel_economy`).
+
+## Dashboard: MPG bars
+
+Four horizontal bars (instant, 10 min, 2 h, 12 h) stacked vertically, as on the van's Drive tab.
+They are built-in tile cards with the `bar-gauge` feature (scale 0–30 MPG). The `card_mod` styling
+squeezes each tile to 51 px and bottom-aligns the stack; it needs
+[card-mod](https://github.com/thomasloven/lovelace-card-mod) from HACS. Leave the `card_mod` blocks out
+for standard-height tiles.
+
+```yaml
+type: vertical-stack
+grid_options:
+  columns: 13
+  rows: auto
+card_mod:
+  style: |
+    :host { height: 220px; --vertical-stack-card-gap: 5px; }
+    #root { height: 100%; justify-content: flex-end; }
+cards:
+  - type: tile
+    entity: sensor.real_time_fuel_economy
+    name: Instant
+    icon: mdi:gas-station
+    color: green
+    vertical: false
+    features_position: inline
+    features:
+      - type: bar-gauge
+        min: 0
+        max: 30
+    card_mod: &mpg_bar_style
+      style: |
+        ha-card { height: 51px !important; min-height: 0 !important; --tile-icon-size: 28px; }
+        .container { padding: 0 8px !important; }
+        .content { padding: 0 !important; min-height: 0 !important; height: 51px !important; }
+        hui-card-features { --feature-height: 20px; padding: 0 12px 0 0 !important; }
+  - type: tile
+    entity: sensor.average_mpg_10_min
+    name: 10 min
+    icon: mdi:gas-station
+    color: blue
+    vertical: false
+    features_position: inline
+    features:
+      - type: bar-gauge
+        min: 0
+        max: 30
+    card_mod: *mpg_bar_style
+  - type: tile
+    entity: sensor.average_mpg_2_hour
+    name: 2 hr
+    icon: mdi:gas-station
+    color: indigo
+    vertical: false
+    features_position: inline
+    features:
+      - type: bar-gauge
+        min: 0
+        max: 30
+    card_mod: *mpg_bar_style
+  - type: tile
+    entity: sensor.average_mpg_12_hour
+    name: 12 hr
+    icon: mdi:gas-station
+    color: purple
+    vertical: false
+    features_position: inline
+    features:
+      - type: bar-gauge
+        min: 0
+        max: 30
+    card_mod: *mpg_bar_style
+```
+
+The YAML anchor (`&mpg_bar_style` / `*mpg_bar_style`) only works when you paste the card into the
+dashboard's raw configuration editor; the UI card editor expands it on save. `grid_options` applies to
+sections views. `:host { height: 220px }` sizes it for a 1480×320 display; change it for your screen
+or remove it.
