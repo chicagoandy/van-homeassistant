@@ -5,6 +5,7 @@ Home Assistant packages for the van (HAOS 2026.11, WiCAN OBD + Victron GX GPS).
 | Package | What it does |
 |---|---|
 | `packages/van_mpg.yaml` | Engine-live detection, GPS speed, distance and odometer, fuel totals, and 10 min / 2 h / 12 h average MPG measured in **engine time** |
+| `packages/van_fuel_stop.yaml` | `rest_command.fuel_station_nearby`: asks OpenStreetMap (Overpass) whether a fuel station is within 75 m of the GPS position; used to keep the front display on longer at fuel stops |
 
 ## Install
 

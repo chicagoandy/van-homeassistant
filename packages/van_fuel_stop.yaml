@@ -1,0 +1,30 @@
+# =============================================================================
+#  van_fuel_stop — "is the van at a fuel station?" from GPS
+# =============================================================================
+#  rest_command.fuel_station_nearby asks OpenStreetMap (Overpass API) how many
+#  fuel stations (amenity=fuel) lie within `radius` metres of a position.
+#  Call it with response_variable to read the answer:
+#
+#    - action: rest_command.fuel_station_nearby
+#      data:
+#        latitude: "{{ state_attr('device_tracker.nmea_0183_gps_acm0_location', 'latitude') }}"
+#        longitude: "{{ state_attr('device_tracker.nmea_0183_gps_acm0_location', 'longitude') }}"
+#      response_variable: fuel
+#    # fuel.content.elements[0].tags.total  -> "0", "1", ...
+#
+#  Used by the "Front display: shut down after engine off" automation to wait
+#  longer before shutting the display down at a fuel stop. Needs internet; if
+#  the lookup fails the automation uses its normal (short) wait.
+# =============================================================================
+
+rest_command:
+  fuel_station_nearby:
+    url: "https://overpass-api.de/api/interpreter"
+    method: post
+    content_type: "application/x-www-form-urlencoded"
+    timeout: 15
+    payload: >-
+      {% set r = radius | default(75) %}
+      {% set q = '[out:json][timeout:10];nwr(around:' ~ r ~ ',' ~ latitude ~ ',' ~ longitude
+                 ~ ')[amenity=fuel];out count;' %}
+      {{ {'data': q} | urlencode }}
