@@ -1,0 +1,83 @@
+# =============================================================================
+#  wican_extra — WiCAN readings that only the WiCAN integration used to provide
+# =============================================================================
+#  The WiCAN publishes every AutoPID reading on its own MQTT topic,
+#  wican/<PID name>, with a JSON payload such as
+#    {"0E-TimingAdvance": 9.5, "timestamp": 1795536166}
+#  The main WiCAN sensors live in packages/wican/wican.yaml. This package adds
+#  the readings that were only available through the WiCAN integration, so
+#  the integration can be removed. They join the same "WiCAN" device.
+#
+#  Units: the WiCAN sends metric values (km, seconds). Home Assistant converts
+#  distances to miles for display.
+# =============================================================================
+
+mqtt:
+  sensor:
+    - name: "Timing Advance"
+      unique_id: wican_obd_timing_advance
+      default_entity_id: sensor.wican_timing_advance
+      state_topic: "wican/0E-TimingAdvance"
+      value_template: "{{ value_json['0E-TimingAdvance'] }}"
+      unit_of_measurement: "°"
+      state_class: measurement
+      suggested_display_precision: 1
+      icon: mdi:sine-wave
+      device: &wican_device
+        identifiers: ["WiCAN"]
+        name: "WiCAN"
+
+    - name: "Relative Throttle Position"
+      unique_id: wican_obd_relative_throttle
+      default_entity_id: sensor.wican_relative_throttle_position
+      state_topic: "wican/45-RelThrottlePos"
+      value_template: "{{ value_json['45-RelThrottlePos'] }}"
+      unit_of_measurement: "%"
+      state_class: measurement
+      suggested_display_precision: 1
+      icon: mdi:car-cruise-control
+      device: *wican_device
+
+    - name: "Time Since Engine Start"
+      unique_id: wican_obd_time_since_engine_start
+      default_entity_id: sensor.wican_time_since_engine_start
+      state_topic: "wican/1F-TimeSinceEngStart"
+      value_template: "{{ value_json['1F-TimeSinceEngStart'] }}"
+      device_class: duration
+      unit_of_measurement: "s"
+      state_class: measurement
+      icon: mdi:timer-outline
+      device: *wican_device
+
+    - name: "Distance With Check Engine Light On"
+      unique_id: wican_obd_distance_mil_on
+      default_entity_id: sensor.wican_distance_mil_on
+      state_topic: "wican/21-DistanceMILOn"
+      value_template: "{{ value_json['21-DistanceMILOn'] }}"
+      device_class: distance
+      unit_of_measurement: "km"
+      state_class: measurement
+      icon: mdi:engine-outline
+      device: *wican_device
+
+    - name: "Warm-ups Since Codes Cleared"
+      unique_id: wican_obd_warmups_since_clear
+      default_entity_id: sensor.wican_warmups_since_codes_cleared
+      state_topic: "wican/30-WarmupsSinceCodeClear"
+      value_template: "{{ value_json['30-WarmupsSinceCodeClear'] }}"
+      state_class: measurement
+      icon: mdi:counter
+      entity_category: diagnostic
+      device: *wican_device
+
+    - name: "Distance Since Codes Cleared"
+      unique_id: wican_obd_distance_since_clear
+      default_entity_id: sensor.wican_distance_since_codes_cleared
+      state_topic: "wican/31-DistanceSinceCodeClear"
+      value_template: "{{ value_json['31-DistanceSinceCodeClear'] }}"
+      device_class: distance
+      unit_of_measurement: "km"
+      state_class: measurement
+      icon: mdi:map-marker-distance
+      entity_category: diagnostic
+      device: *wican_device
