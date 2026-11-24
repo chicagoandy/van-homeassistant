@@ -35,3 +35,18 @@ rest_command:
       {% set q = '[out:json][timeout:10];nwr(around:' ~ r ~ ',' ~ latitude ~ ',' ~ longitude
                  ~ ')[amenity=fuel];out count;' %}
       {{ {'data': q} | urlencode }}
+
+  # Nominatim reverse lookup: the nearest point of interest to a position.
+  # One light GET, far more reliable than Overpass. The answer has
+  # category "amenity" + type "fuel" at a station, plus that place's lat/lon,
+  # so the caller checks the distance. Usage policy: an identifying
+  # User-Agent and no more than 1 request per second.
+  #   fuel.content.category / .type / .lat / .lon / .name
+  nearest_poi:
+    url: >-
+      https://nominatim.openstreetmap.org/reverse?format=jsonv2&layer=poi&zoom=18&lat={{ latitude }}&lon={{ longitude }}
+    method: get
+    headers:
+      User-Agent: "HomeAssistant-van-fuel-stop/1.0 (+https://github.com/chicagoandy/van-homeassistant)"
+      Accept: "application/json"
+    timeout: 10
