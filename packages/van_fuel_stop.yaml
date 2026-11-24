@@ -23,6 +23,10 @@ rest_command:
     url: "https://overpass-api.de/api/interpreter"
     method: post
     content_type: "application/x-www-form-urlencoded"
+    # Overpass answers 406 to requests without an identifying User-Agent.
+    headers:
+      User-Agent: "HomeAssistant-van-fuel-stop/1.0 (+https://github.com/chicagoandy/van-homeassistant)"
+      Accept: "application/json"
     timeout: 15
     payload: >-
       {% set r = radius | default(75) %}
