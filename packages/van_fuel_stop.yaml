@@ -12,9 +12,10 @@
 #      response_variable: fuel
 #    # fuel.content.elements[0].tags.total  -> "0", "1", ...
 #
-#  Used by the "Front display: shut down after engine off" automation to wait
-#  longer before shutting the display down at a fuel stop. Needs internet; if
-#  the lookup fails the automation uses its normal (short) wait.
+#  Used by the "Front display: longer shutdown wait at fuel stations" automation,
+#  which restarts the display's shutdown timer at 15 minutes when the van stops
+#  at a station. Needs internet; if the lookup fails, the normal 2-minute wait
+#  applies.
 # =============================================================================
 
 rest_command:
