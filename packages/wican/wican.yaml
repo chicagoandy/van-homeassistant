@@ -1,0 +1,832 @@
+template:
+-  sensor:
+    - name: "Approximate Range"
+      unique_id: 2ea4c5a0-5472-450a-8737-878177d190d1
+      device_class: distance
+      state_class: measurement
+      unit_of_measurement: "mi"
+      icon: mdi:gas-station
+      # using our average MPG of 12 and 30 gal fuel tank size to approximate range
+      state: >
+        {{(states('sensor.wican_fuel_level') | int / 100 * 30 * 12 ) | round}}
+
+    - name: "Boost Gauge"
+      unique_id: acb537b6-473c-4860-9b1d-17703c357438
+      state: >
+        {% set intake_pressure = states('sensor.wican_manifold_pressure') | float(0) %}
+        {% set baro_pressure = states('sensor.wican_barometric_pressure') | float(0) %}
+        {{ (intake_pressure - baro_pressure) | round(2) }}
+      icon: mdi:car-turbocharger
+      device_class: pressure
+      state_class: measurement
+      unit_of_measurement: "psi"
+
+    - name: "Engine Torque"
+      unique_id: wican_torque_calc
+      icon: mdi:engine
+      state_class: measurement
+      unit_of_measurement: "lb-ft"
+      state: >
+        {% set ref_torque_nm = states('sensor.wican_engine_torque_reference') | float(0) %}
+        {% set torque_percent = states('sensor.wican_engine_torque_percent') | float(0) %}
+        {% set actual_torque_nm = (ref_torque_nm * (torque_percent / 100)) %}
+        {{ (actual_torque_nm * 0.737562) | round(0) }}
+
+    - name: "Engine Horsepower"
+      unique_id: "wican_horsepower"
+      icon: mdi:engine-outline
+      state_class: measurement
+      unit_of_measurement: "hp"
+      state: >
+        {% set torque_reference_nm =  states('sensor.wican_engine_torque_reference') | float(0) %}
+        {% set torque_percent =  states('sensor.wican_engine_torque_percent') | float(0) %}
+        {% set rpm = states('sensor.wican_engine_speed') | float(0) %}
+        {% set actual_torque_nm = (torque_reference_nm * (torque_percent / 100)) %}
+        {% if actual_torque_nm > 0 and rpm > 0 %}
+          {{ (actual_torque_nm * rpm / 7127) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+
+    - name: "Vehicle Battery Power"
+      unique_id: wican_bcm_bat_power
+      unit_of_measurement: "W"
+      state_class: measurement
+      device_class: power
+      icon: mdi:flash
+      state: >
+        {% set voltage = states('sensor.wican_vehicle_battery_voltage') | float(0) %}
+        {% set current = states('sensor.wican_vehicle_battery_current') | float(0) %}
+        {{ (voltage * current) | round(1) }}
+
+    - name: "Real Time Fuel Economy"
+      unique_id: real_time_fuel_economy
+      unit_of_measurement: "MPG"
+      state_class: measurement
+      icon: mdi:gas-station
+      state: >
+        {% set running = is_state('binary_sensor.engine_running', 'on') %}
+        {% set mph = states('sensor.nmea_0183_gps_acm0_victron_vehicle_speed') | float(0) %}
+        {% set gps = states('sensor.wican_fuel_rate_engine_running') | float(0) %}
+        {% set gph = gps * 3600 / 2819 %}
+        {% if not running or mph < 1 %}
+          0
+        {% elif gph <= 0 %}
+          99
+        {% else %}
+          {{ [ (mph / gph), 99 ] | min | round(1) }}
+        {% endif %}
+      attributes:
+        speed_mph: "{{ states('sensor.nmea_0183_gps_acm0_victron_vehicle_speed') | float(0) }}"
+        fuel_gph: >
+          {{ (states('sensor.wican_fuel_rate_engine_running') | float(0) * 3600 / 2819) | round(2) }}
+        speed_source: "Victron GPS"
+
+    - name: "Vehicle Battery Charge Mode Text"
+      unique_id: wican_bat_charge_mode_text
+      icon: mdi:flash
+      state: >-
+        {% set mode = states('sensor.wican_battery_charge_mode')|int(0) %}
+        {% if mode == 0 -%}
+        Conventional Charging
+        {% elif mode == 1 -%}
+        Slow Regen Allowed
+        {% elif mode == 2 -%}
+        Fast Regen Allowed
+        {% elif mode == 3 -%}
+        Slow Regen Allowed, NO Discharge Allowed
+        {% elif mode == 4 -%}
+        Battery Refresh
+        {% elif mode == 5 -%}
+        Battery Identity
+        {%- else -%}
+        Unknown
+        {%- endif %}    
+
+-  binary_sensor:
+    - name: "Engine Running"
+      unique_id: engine_running_sensor
+      device_class: power 
+      state: >
+        {% set rpm = states('sensor.wican_engine_speed') | float(0) %}
+        {% set obd_status = is_state('binary_sensor.wican_obd_status','on') %}
+        {{ rpm > 1 and obd_status }}
+      icon: >
+        {% set rpm = states('sensor.wican_engine_speed') | float(0) %}
+        {% set obd_status = is_state('binary_sensor.wican_obd_status','on') %}
+        {% if rpm > 1 and obd_status %}
+          mdi:engine
+        {% else %}
+          mdi:engine-off
+        {% endif %}
+
+
+    
+
+
+mqtt:
+  binary_sensor:
+    #Detect of WiCAN is online
+    - name: "OBD Status"
+      unique_id: wican_obd_status
+      state_topic: "wican/status"
+      icon: mdi:state-machine
+      entity_category: diagnostic
+      payload_on: '{"status": "online"}'
+      payload_off: '{"status": "offline"}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    #Detect if brake pedal is pressed
+    - name: "Brake On/Off"
+      unique_id: wican_brake_on_off
+      state_topic: "wican/PARK_BRAKE"
+      icon: mdi:car-brake-hold
+      value_template: '{{ (value_json["PARK_BRAKE"]) | round(0) }}'
+      payload_on: '6'
+      payload_off: '0'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    #Detect A/C Compressor
+    - name: "A/C Compressor Status"
+      unique_id: wican_ac_compressor
+      state_topic: "wican/AC_COMP"
+      icon: mdi:air-conditioner
+      value_template: '{{ (value_json["AC_COMP"]) | round(0) }}'
+      payload_on: '1'
+      payload_off: '0'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    #Detect Driver Door Status
+    - name: "Driver Door Status"
+      unique_id: wican_driver_door_status
+      state_topic: "wican/bcm-driver-ajar"
+      icon: mdi:car-door
+      device_class: door
+      value_template: '{{ (value_json["BCM-Driver-Ajar"]) | round(0) }}'
+      payload_on: '1'
+      payload_off: '0'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    #Detect Passenger Door Status
+    - name: "Passenger Door Status"
+      unique_id: wican_passenger_door_status
+      state_topic: "wican/bcm-passenger-ajar"
+      icon: mdi:car-door
+      device_class: door
+      value_template: '{{ (value_json["BCM-Passenger-Ajar"]) | round(0) }}'
+      payload_on: '1'
+      payload_off: '0'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    #Detect Slider Door Status
+    - name: "Slider Door Status"
+      unique_id: wican_slider_door_status
+      state_topic: "wican/bcm-slider-ajar"
+      icon: mdi:car-door
+      device_class: door
+      value_template: '{{ (value_json["BCM-Slider-Ajar"]) | round(0)}}'
+      payload_on: '1'
+      payload_off: '0'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    #Detect Rear Door Status
+    - name: "Rear Door Status"
+      unique_id: wican_rear_door_status
+      state_topic: "wican/bcm-rear-ajar"
+      icon: mdi:car-door
+      device_class: door
+      value_template: '{{ (value_json["BCM-Rear-Ajar"]) | round(0) }}'
+      payload_on: '1'
+      payload_off: '0'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+  sensor:
+
+#### OBD Standard Interface ####
+
+    - name: "Vehicle Speed"
+      unique_id: wican_obd_vehicle_speed
+      state_topic: "wican/0D-VehicleSpeed"
+      unit_of_measurement: "mph"
+      state_class: measurement
+      icon: mdi:speedometer
+      # convert to MPH (from KPH)
+      value_template: '{{ (value_json["0D-VehicleSpeed"] | default(0) * 0.621371) | round }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Engine Speed"
+      unique_id: wican_obd_rpm
+      state_topic: "wican/0C-EngineRPM"
+      unit_of_measurement: "RPM"
+      state_class: measurement
+      icon: mdi:engine
+      # no conversion needed
+      value_template: '{{ (value_json["0C-EngineRPM"] | default(0)) | round }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Odometer"
+      unique_id: wican_obd_odometer
+      state_topic: "wican/A6-Odometer"
+      unit_of_measurement: "mi"
+      device_class: distance
+      icon: mdi:counter
+      # convert to miles from kilometers
+      value_template: '{{ (value_json["A6-Odometer"] * 0.621371) | round }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Fuel Level"
+      unique_id: wican_obd_tank_level
+      state_topic: "wican/2F-FuelTankLevel"
+      unit_of_measurement: "%"
+      device_class: moisture
+      state_class: measurement
+      icon: mdi:gas-station
+      # percent full
+      value_template: '{{ value_json["2F-FuelTankLevel"] | default(0) | round }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Barometric Pressure"
+      unique_id: wican_obd_barometric
+      state_topic: "wican/33-AbsBaroPres"
+      unit_of_measurement: "psi"
+      device_class: pressure
+      state_class: measurement
+      icon: mdi:gauge
+      # kPa → psi
+      value_template: '{{ (value_json["33-AbsBaroPres"] * 0.145038 | default(0)) | round(1) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Manifold Pressure"
+      unique_id: wican_obd_intake_pressure
+      state_topic: "wican/0B-IntakeManiAbsPress"
+      unit_of_measurement: "psi"
+      device_class: pressure
+      state_class: measurement
+      icon: mdi:gauge
+      # kPa → psi
+      value_template: '{{ (value_json["0B-IntakeManiAbsPress"] * 0.145038 | default(0)) | round(1) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Engine Torque Reference"
+      unique_id: wican_obd_torque_ref
+      state_topic: "wican/63-EngRefTorq"
+      unit_of_measurement: "Nm"
+      state_class: measurement
+      icon: mdi:engine
+      entity_category: diagnostic
+      # reference torque
+      value_template: '{{ value_json["63-EngRefTorq"] | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Engine Torque Percent"
+      unique_id: wican_obd_torque_pct
+      state_topic: "wican/62-ActualEngTorqPct"
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:engine
+      # percent of reference
+      value_template: '{{ value_json["62-ActualEngTorqPct"] | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Engine Load"
+      unique_id: wican_obd_engine_load
+      state_topic: "wican/04-CalcEngineLoad"
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:engine
+      # percent load
+      value_template: '{{ value_json["04-CalcEngineLoad"] | default(0) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Throttle Position"
+      unique_id: wican_obd_throttle_pos
+      state_topic: "wican/11-ThrottlePosition"
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:speedometer
+      # percent open
+      value_template: '{{ value_json["11-ThrottlePosition"] | default(0) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Ambient Air Temp"
+      unique_id: wican_odb_ambient_air_temp
+      state_topic: "wican/46-AmbientAirTemp"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      state_class: measurement
+      icon: mdi:thermometer
+      # convert from °C to °F
+      value_template: '{{ ((value_json["46-AmbientAirTemp"] | default(0) * 9/5) + 32) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+#### Powertrain Control Module ####
+
+    - name: "Drive Mode"
+      unique_id: wican_pcm_drive_mode
+      state_topic: "wican/DRIVE_MODE"
+      icon: mdi:car-shift-pattern
+      # raw value
+      value_template: >
+        {% set gear = value_json["DRIVE_MODE"] | int %}
+        {% if gear == 0 %} Normal
+        {% elif gear == 6 %} Eco
+        {% elif gear == 5 %} Slippery
+        {% elif gear == 8 %} Mud/Ruts
+        {% elif gear == 3 %} Tow/Haul
+        {% else %} Error
+        {% endif %}
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Engine Coolant Temp"
+      unique_id: wican_pcm_engine_coolant_temp
+      state_topic: "wican/COOLANT_TMP"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      state_class: measurement
+      icon: mdi:thermometer-water
+      # raw value
+      value_template: '{{ ((value_json["COOLANT_TMP"] | default(0) * 9/5) + 32) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Fuel Pressure Actual"
+      unique_id: wican_pcm_fuel_pressure_actual
+      state_topic: "wican/FUEL_PRESSURE"
+      unit_of_measurement: "psi"
+      device_class: pressure
+      state_class: measurement
+      icon: mdi:gauge
+      # convert from kPa to psi
+      value_template: '{{ (value_json["FUEL_PRESSURE"] | default(0) * 0.145038) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Fuel Pressure Desired"
+      unique_id: wican_pcm_fuel_pressure_desired
+      state_topic: "wican/FUEL_PRESSURE_D"
+      unit_of_measurement: "psi"
+      device_class: pressure
+      state_class: measurement
+      icon: mdi:gauge
+      # convert from kPa to psi
+      value_template: '{{ (value_json["FUEL_PRESSURE_D"] | default(0) * 0.145038) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Alternator Duty Cycle"
+      unique_id: wican_pcm_alternator_duty_cycle
+      state_topic: "wican/ALT_DUTY"
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:percent
+      # raw value - Adjusted from base-8 to base-10, then dvivided by 2 for dual-alternators
+      value_template: '{{ value_json["ALT_DUTY"] | default(0) * 100 / 128 /2| round(0)  }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Fuel Pump Duty Cycle"
+      unique_id: wican_pcm_fuel_pump_duty_cycle
+      state_topic: "wican/FUEL_PUMP_DUTY"
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:percent
+      # raw value
+      value_template: '{{ value_json["FUEL_PUMP_DUTY"] | default(0) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Fuel Rate"
+      unique_id: b3668d3f-177e-47dd-9d7c-c7724c5c57c9
+      state_topic: "wican/FUEL_RATE"
+      unit_of_measurement: "g/s"
+      state_class: measurement
+      icon: mdi:chart-line
+      # grams per second
+      value_template: '{{ (value_json["FUEL_RATE"] | default(0)) | round(2) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Fuel System Status"
+      unique_id: wican_pcm_fuel_system_status
+      state_topic: "wican/FUEL_SYS_STAT"
+      icon: mdi:engine
+      value_template: >
+        {% set gear = value_json["FUEL_SYS_STAT"] | int %}
+        {% if gear == 0 %} Engine Off
+        {% elif gear == 1 %} Open Loop - Low Engine Temp
+        {% elif gear == 2 %} Closed Loop
+        {% elif gear == 4 %} Open Loop - Engine Load
+        {% elif gear == 8 %} Open Loop - System Failure
+        {% elif gear == 16 %} Closed Loop - System Failure
+        {% else %} Error
+        {% endif %}
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Intake Air Temp"
+      unique_id: wican_pcm_intake_air_temp
+      state_topic: "wican/INTAKE_AIR_TMP"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      state_class: measurement
+      icon: mdi:air-filter
+      # convert from °C to °F
+      value_template: '{{ ((value_json["INTAKE_AIR_TMP"] | default(0) * 9/5) + 32) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Intake Air Temp 2"
+      unique_id: wican_pcm_intake_air_temp_2
+      state_topic: "wican/INTAKE_AIR_TEMP_2"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      state_class: measurement
+      icon: mdi:air-filter
+      # convert from °C to °F
+      value_template: '{{ ((value_json["INTAKE_AIR_TEMP_2"] | default(0) * 9/5) + 32) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Learned Octane Ratio"
+      unique_id: wican_pcm_learned_octane_ratio
+      state_topic: "wican/OCTANE_RATIO_L"
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:percent
+      # Ford learned octane ratio as the WiCAN reports it (about 0-4 on this van:
+      # high = learned high-octane fuel). Keep two decimals: whole numbers hide
+      # the steps between fill-ups.
+      value_template: '{{ (value_json["OCTANE_RATIO_L"] | default(0)) | round(2) }}'
+      suggested_display_precision: 2
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Oil Life"
+      unique_id: wican_pcm_oil_life
+      state_topic: "wican/OIL_LIFE"
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:oil
+      # raw percent
+      value_template: '{{ (value_json["OIL_LIFE"]) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Transmission Fluid Temp"
+      unique_id: wican_pcm_trans_fluid_temp
+      state_topic: "wican/TRAN_F_TEMP"
+      unit_of_measurement: "°F"
+      device_class: temperature
+      state_class: measurement
+      icon: mdi:thermometer
+      # convert from °C to °F
+      value_template: '{{ ((value_json["TRAN_F_TEMP"] | default(0) * 9/5) + 32) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Transmission Gear"
+      unique_id: wican_pcm_trans_gear_cmd
+      state_topic: "wican/GEAR"
+      icon: mdi:car-shift-pattern
+      # map numeric code to gear letter/number
+      value_template: >
+        {% set gear = value_json["GEAR"] | int %}
+        {% if gear == 70 %} P
+        {% elif gear == 60 %} R
+        {% elif gear == 50 %} N
+        {% elif gear == 46 %} D
+        {% elif gear >= 1 and gear <= 10 %} {{ gear }}
+        {% else %} Error
+        {% endif %}
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Wastegate"
+      unique_id: wican_pcm_wastegate
+      state_topic: "wican/WASTEGATE"
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:valve
+      # percent open
+      value_template: '{{ value_json["WASTEGATE"] | default(0) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+#### Body Control Module ####
+
+
+    - name: "Battery Charge Mode"
+      unique_id: wican_bat_chrg_mode
+      state_topic: "wican/BAT-CHRG-MODE"
+      icon: mdi:battery
+# raw value
+      value_template: '{{ value_json["BAT-CHRG-MODE"] | round(1) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Vehicle Battery Current"
+      unique_id: wican_bcm_bat_cur
+      state_topic: "wican/HV_A"
+      unit_of_measurement: "A"
+      state_class: measurement
+      icon: mdi:current-dc
+      # raw value
+      value_template: '{{ value_json["HV_A"] | round(1) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Vehicle Battery Voltage"
+      unique_id: wican_bcm_bat_volt
+      state_topic: "wican/HV_V"
+      unit_of_measurement: "V"
+      state_class: measurement
+      icon: mdi:alpha-v-box
+      # raw value
+      value_template: '{{ value_json["HV_V"] | round(2) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Vehicle Battery State of Charge"
+      unique_id: wican_bcm_bat_soc
+      state_topic: "wican/SOC"
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:car-battery
+      # raw value
+      value_template: '{{ value_json["SOC"] | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Tire Pressure Left Front"
+      unique_id: wican_bcm_tp_left_front
+      state_topic: "wican/TYRE_P_FL"
+      unit_of_measurement: "psi"
+      state_class: measurement
+      icon: mdi:car-tire-alert
+      # convert from kPa to psi
+      value_template: '{{ (value_json["TYRE_P_FL"] | default(0) * 0.49115420) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Tire Pressure Right Front"
+      unique_id: wican_bcm_tp_right_front
+      state_topic: "wican/TYRE_P_FR"  
+      unit_of_measurement: "psi"
+      state_class: measurement
+      icon: mdi:car-tire-alert
+      # convert from kPa to psi
+      value_template: '{{ (value_json["TYRE_P_FR"] | default(0) * 0.49115420) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Tire Pressure Left Rear"
+      unique_id: wican_bcm_tp_left_rear
+      state_topic: "wican/TYRE_P_RL"
+      unit_of_measurement: "psi"
+      state_class: measurement
+      icon: mdi:car-tire-alert
+      # convert from kPa to psi
+      value_template: '{{ (value_json["TYRE_P_RL"] | default(0) * 0.49115420) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+
+    - name: "Tire Pressure Right Rear"
+      unique_id: wican_bcm_tp_right_rear
+      state_topic: "wican/TYRE_P_RR"
+      unit_of_measurement: "psi"
+      state_class: measurement
+      icon: mdi:car-tire-alert
+      # convert from kPa to psi
+      value_template: '{{ (value_json["TYRE_P_RR"] | default(0) * 0.49115420) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+#### Readings previously only in the WiCAN integration ####
+
+    - name: "Timing Advance"
+      unique_id: wican_obd_timing_advance
+      state_topic: "wican/0E-TimingAdvance"
+      unit_of_measurement: "°"
+      state_class: measurement
+      icon: mdi:sine-wave
+      # degrees before top dead centre, cylinder 1
+      value_template: '{{ (value_json["0E-TimingAdvance"] | default(0)) | round(1) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Relative Throttle Position"
+      unique_id: wican_obd_relative_throttle
+      state_topic: "wican/45-RelThrottlePos"
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:car-cruise-control
+      value_template: '{{ (value_json["45-RelThrottlePos"] | default(0)) | round(1) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Time Since Engine Start"
+      unique_id: wican_obd_time_since_engine_start
+      state_topic: "wican/1F-TimeSinceEngStart"
+      unit_of_measurement: "s"
+      device_class: duration
+      state_class: measurement
+      icon: mdi:timer-outline
+      value_template: '{{ value_json["1F-TimeSinceEngStart"] | default(0) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Distance With Check Engine Light On"
+      unique_id: wican_obd_distance_mil_on
+      state_topic: "wican/21-DistanceMILOn"
+      unit_of_measurement: "mi"
+      device_class: distance
+      state_class: measurement
+      icon: mdi:engine-outline
+      # convert to miles from kilometers
+      value_template: '{{ (value_json["21-DistanceMILOn"] | default(0) * 0.621371) | round(1) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Warm-ups Since Codes Cleared"
+      unique_id: wican_obd_warmups_since_clear
+      state_topic: "wican/30-WarmupsSinceCodeClear"
+      state_class: measurement
+      icon: mdi:counter
+      entity_category: diagnostic
+      value_template: '{{ value_json["30-WarmupsSinceCodeClear"] | default(0) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"
+
+    - name: "Distance Since Codes Cleared"
+      unique_id: wican_obd_distance_since_clear
+      state_topic: "wican/31-DistanceSinceCodeClear"
+      unit_of_measurement: "mi"
+      device_class: distance
+      state_class: measurement
+      icon: mdi:map-marker-distance
+      entity_category: diagnostic
+      # convert to miles from kilometers
+      value_template: '{{ (value_json["31-DistanceSinceCodeClear"] | default(0) * 0.621371) | round(0) }}'
+      device:
+        identifiers: ["WiCAN"]
+        manufacturer: "MeatPi"
+        model: "WiCAN OBD"
+        name: "WiCAN"

@@ -5,7 +5,7 @@ Home Assistant packages for the van (HAOS 2026.11, WiCAN OBD + Victron GX GPS).
 | Package | What it does |
 |---|---|
 | `packages/van_mpg.yaml` | Engine-live detection, GPS speed, distance and odometer, fuel totals, and 10 min / 2 h / 12 h average MPG measured in **engine time** |
-| `packages/wican_extra.yaml` | WiCAN readings that only the WiCAN integration provided (timing advance, relative throttle, time since engine start, distance with check-engine light on, warm-ups and distance since codes cleared), as MQTT sensors on the WiCAN device |
+| `packages/wican/wican.yaml` | WiCAN MQTT sensors (all readings, including timing advance, relative throttle, time since engine start, check-engine-light distance, warm-ups and distance since codes cleared) and the WiCAN-based templates (engine running, real-time MPG, boost, torque, horsepower, range) |
 
 ## Install
 
@@ -60,7 +60,7 @@ the 2-hour figure is always your last ~2 hours of running.
 | `sensor.mpg_accumulator` | engine minutes logged; weighted sums in attributes |
 | `sensor.average_mpg_10_min` / `_2_hour` / `_12_hour` | MPG |
 
-Real-time (instant) MPG lives in `packages/wican/wican.yaml` (`sensor.real_time_fuel_economy`).
+Real-time (instant) MPG lives in `packages/wican/wican.yaml` (`sensor.real_time_fuel_economy`), also in this repo.
 
 ## Dashboard: MPG bars
 
