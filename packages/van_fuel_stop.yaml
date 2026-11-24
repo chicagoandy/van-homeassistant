@@ -12,10 +12,12 @@
 #      response_variable: fuel
 #    # fuel.content.elements[0].tags.total  -> "0", "1", ...
 #
-#  Used by the "Front display: longer shutdown wait at fuel stations" automation,
-#  which restarts the display's shutdown timer at 15 minutes when the van stops
-#  at a station. Needs internet; if the lookup fails, the normal 2-minute wait
-#  applies.
+#  rest_command.nearest_poi (Nominatim, below) is what the "Front display: longer
+#  shutdown wait at fuel stations" automation uses: if the nearest point of
+#  interest is amenity=fuel within 120 m, it restarts the display's shutdown
+#  timer at 15 minutes. The Overpass command is kept as a spare; its public
+#  servers were timing out. Needs internet; if the lookup fails, the normal
+#  2-minute wait applies.
 # =============================================================================
 
 rest_command:
