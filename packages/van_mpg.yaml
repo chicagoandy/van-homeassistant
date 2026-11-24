@@ -179,7 +179,9 @@ template:
     variables:
       is_data: "{{ trigger.id == 'data' }}"
       delta: >
-        {{ (trigger.to_state.state | float - trigger.from_state.state | float)
+        {# Variables render before the conditions above reject non-numbers
+           (e.g. 'unavailable' during a template reload), so default to 0. #}
+        {{ (trigger.to_state.state | float(0) - trigger.from_state.state | float(0))
            if is_data else 0 }}
       d_fuel: >
         {{ delta if is_data and trigger.entity_id == 'sensor.fuel_use_total_grams'
