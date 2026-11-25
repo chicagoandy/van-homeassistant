@@ -1,0 +1,38 @@
+# =============================================================================
+#  peplink_api — call any documented Peplink API function from Home Assistant
+# =============================================================================
+#  Uses the access token that the Peplink REST package keeps fresh in
+#  sensor.pep_token (no password here). Call with response_variable to read
+#  the answer:
+#
+#    - action: rest_command.peplink_api_get
+#      data: {func: config.wan.connection}
+#      response_variable: r            # r.content.response...
+#
+#    - action: rest_command.peplink_api_post
+#      data:
+#        func: config.wan.connection
+#        payload: {action: update, list: [{id: 1, healthcheck: {retry: 3}}]}
+#    - action: rest_command.peplink_api_post
+#      data: {func: cmd.config.apply, payload: {}}
+#
+#  Optional `host` (default 192.168.50.1). The router uses a self-signed
+#  certificate, so verify_ssl is off; keep the admin API off the internet.
+# =============================================================================
+
+rest_command:
+  peplink_api_get:
+    url: >-
+      https://{{ host | default('192.168.50.1') }}/api/{{ func }}?accessToken={{ states('sensor.pep_token') }}
+    method: get
+    verify_ssl: false
+    timeout: 15
+
+  peplink_api_post:
+    url: >-
+      https://{{ host | default('192.168.50.1') }}/api/{{ func }}?accessToken={{ states('sensor.pep_token') }}
+    method: post
+    content_type: "application/json"
+    verify_ssl: false
+    timeout: 15
+    payload: "{{ (payload | default({})) | to_json }}"
