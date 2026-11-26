@@ -1,0 +1,186 @@
+# =============================================================================
+#  van_tank_log — per-tank fuel economy and octane/timing log
+# =============================================================================
+#  Needs the van_mpg package (fuel and GPS-distance running totals,
+#  binary_sensor.wican_engine_live) and these WiCAN MQTT sensors:
+#    sensor.wican_fuel_level              tank level, %
+#    sensor.wican_learned_octane_ratio    Ford learned octane ratio (~0 on
+#                                         regular, ~3 on premium on this van)
+#    sensor.wican_timing_advance          ignition timing, ° before TDC
+#    sensor.wican_engine_load             calculated engine load, %
+#
+#  How it works
+#  * While the engine is live and the WiCAN data is fresh, every change of the
+#    fuel or distance total is added to this tank's sums (same rules as the
+#    MPG accumulator, so parked time and WiCAN gaps don't count). Miles only
+#    count while fuel is also being measured, so a WiCAN outage (e.g. while it
+#    is in ELM327 mode for FORScan) can't inflate the MPG.
+#  * Octane: the last learned-octane reading taken while driving over 20 mph.
+#    Ford resets the ratio high right after a fill-up, while parked, so
+#    parked readings are ignored.
+#  * Timing: average ignition timing while working hard (engine load ≥ 60 %
+#    and over 30 mph). More advance under load = the engine is using the fuel's
+#    knock resistance.
+#  * Fill-up: the tank level jumps by 15 points or more (from at least 2 %,
+#    because the WiCAN sometimes reports a stray 0). The finished tank is
+#    written to `last_*` attributes and the `tanks` list (newest first, last
+#    12), then the sums restart.
+#  * Grade is guessed from the octane ratio: ≥ 2 Premium, ≤ 0.5 Regular,
+#    otherwise Mixed. A tank under 30 miles is logged but flagged "short".
+#  * A fill-up only counts after 20 miles on the current tank (tank-level
+#    slosh can't log a fake one), and the first tank after install is marked
+#    complete: false because it started mid-tank.
+# =============================================================================
+
+template:
+  - triggers:
+      - trigger: state
+        id: data
+        entity_id:
+          - sensor.fuel_use_total_grams
+          - sensor.victron_nmea_0183_gps_acm0_gps_distance_driven
+      - trigger: state
+        id: refuel
+        entity_id: sensor.wican_fuel_level
+      # Start-up / reload: rewrite attributes unchanged so they always exist.
+      - trigger: homeassistant
+        id: init
+        event: start
+      - trigger: event
+        id: init
+        event_type: event_template_reloaded
+    conditions:
+      - condition: or
+        conditions:
+          - condition: trigger
+            id: init
+          - condition: and
+            conditions:
+              - condition: trigger
+                id: refuel
+              - condition: template
+                value_template: >
+                  {% set a = trigger.from_state.state if trigger.from_state else 'x' %}
+                  {% set b = trigger.to_state.state if trigger.to_state else 'x' %}
+                  {% set m = state_attr('sensor.tank_log', 'miles') | float(0) %}
+                  {{ a | is_number and b | is_number
+                     and a | float >= 2 and b | float - a | float >= 15
+                     and m >= 20 }}
+          - condition: and
+            conditions:
+              - condition: trigger
+                id: data
+              - condition: state
+                entity_id: binary_sensor.wican_engine_live
+                state: "on"
+              - condition: template
+                value_template: >
+                  {% set f = states.sensor.wican_fuel_rate %}
+                  {{ f is not none and (now() - f.last_reported).total_seconds() < 30 }}
+              - condition: template
+                value_template: >
+                  {{ trigger.from_state is not none and trigger.to_state is not none
+                     and trigger.from_state.state | is_number
+                     and trigger.to_state.state | is_number }}
+    variables:
+      is_data: "{{ trigger.id == 'data' }}"
+      is_refuel: "{{ trigger.id == 'refuel' }}"
+      delta: >
+        {{ (trigger.to_state.state | float(0) - trigger.from_state.state | float(0))
+           if is_data else 0 }}
+      d_fuel: >
+        {{ delta if is_data and trigger.entity_id == 'sensor.fuel_use_total_grams'
+           and 0 <= delta < 200 else 0 }}
+      d_miles: >
+        {{ delta if is_data and trigger.entity_id != 'sensor.fuel_use_total_grams'
+           and 0 <= delta < 1 else 0 }}
+      # (`this` isn't available to trigger variables, so read the entity.)
+      a: >
+        {% set e = states.sensor.tank_log %}
+        {{ dict(e.attributes) if e is not none else {} }}
+      fuel_g: "{{ a.get('fuel_g', 0) | float(0) + d_fuel }}"
+      miles: "{{ a.get('miles', 0) | float(0) + d_miles }}"
+      speed: "{{ states('sensor.nmea_0183_gps_acm0_victron_vehicle_speed') | float(0) }}"
+      oct_now: "{{ states('sensor.wican_learned_octane_ratio') }}"
+      octane: >
+        {{ oct_now | float if is_data and speed > 20 and oct_now | is_number
+           else a.get('octane', none) }}
+      under_load: >
+        {{ is_data and speed > 30
+           and states('sensor.wican_engine_load') | float(0) >= 60
+           and states('sensor.wican_timing_advance') | is_number }}
+      ta_sum: >
+        {{ a.get('ta_sum', 0) | float(0)
+           + (states('sensor.wican_timing_advance') | float(0) if under_load else 0) }}
+      ta_n: "{{ a.get('ta_n', 0) | int(0) + (1 if under_load else 0) }}"
+      # Finished tank (used only on a refuel)
+      gal: "{{ (fuel_g / 2819) | round(2) }}"
+      tank_mpg: "{{ (miles / (fuel_g / 2819)) | round(2) if fuel_g > 2819 else none }}"
+      grade: >
+        {% if octane is none %}Unknown
+        {% elif octane >= 2 %}Premium
+        {% elif octane <= 0.5 %}Regular
+        {% else %}Mixed{% endif %}
+      finished: >
+        {{ {'ended': now().isoformat(timespec='minutes'),
+            'started': a.get('started', none),
+            'miles': miles | round(1),
+            'gallons': gal,
+            'mpg': tank_mpg,
+            'octane': octane,
+            'grade': grade,
+            'timing_load': (ta_sum / ta_n) | round(1) if ta_n > 20 else none,
+            'short': miles < 30,
+            'complete': a.get('complete', false)} }}
+    sensor:
+      - name: Tank Log
+        unique_id: van_tank_log
+        default_entity_id: sensor.tank_log
+        unit_of_measurement: MPG
+        icon: mdi:gas-station-outline
+        # State: MPG of the last finished tank
+        state: >
+          {% if is_refuel %}{{ finished.mpg }}
+          {% elif this is defined and this.state | is_number %}{{ this.state }}
+          {% else %}{{ none }}{% endif %}
+        attributes:
+          # Current tank (in progress)
+          started: >
+            {{ now().isoformat(timespec='minutes') if is_refuel
+               else a.get('started', now().isoformat(timespec='minutes')) }}
+          fuel_g: "{{ 0 if is_refuel else fuel_g | round(1) }}"
+          miles: "{{ 0 if is_refuel else miles | round(3) }}"
+          octane: "{{ none if is_refuel else octane }}"
+          ta_sum: "{{ 0 if is_refuel else ta_sum | round(1) }}"
+          ta_n: "{{ 0 if is_refuel else ta_n }}"
+          # False until the first fill-up after install (that tank starts mid-way)
+          complete: "{{ true if is_refuel else a.get('complete', false) }}"
+          # Finished tanks, newest first
+          tanks: >
+            {% set t = a.get('tanks', []) %}
+            {{ ([finished] + t)[:12] if is_refuel else t }}
+
+  - sensor:
+      - name: Current Tank MPG
+        unique_id: van_tank_current_mpg
+        default_entity_id: sensor.current_tank_mpg
+        unit_of_measurement: MPG
+        state_class: measurement
+        icon: mdi:gas-station
+        state: >
+          {% set f = state_attr('sensor.tank_log', 'fuel_g') | float(0) %}
+          {% set m = state_attr('sensor.tank_log', 'miles') | float(0) %}
+          {{ (m / (f / 2819)) | round(1) if f > 1000 else none }}
+        attributes:
+          miles: "{{ state_attr('sensor.tank_log', 'miles') | float(0) | round(0) }}"
+          gallons: "{{ (state_attr('sensor.tank_log', 'fuel_g') | float(0) / 2819) | round(1) }}"
+          octane: "{{ state_attr('sensor.tank_log', 'octane') }}"
+          timing_under_load: >
+            {% set n = state_attr('sensor.tank_log', 'ta_n') | int(0) %}
+            {{ (state_attr('sensor.tank_log', 'ta_sum') | float(0) / n) | round(1) if n > 20 else none }}
+          grade_guess: >
+            {% set o = state_attr('sensor.tank_log', 'octane') %}
+            {% if o is none %}Unknown
+            {% elif o | float >= 2 %}Premium
+            {% elif o | float <= 0.5 %}Regular
+            {% else %}Mixed{% endif %}
